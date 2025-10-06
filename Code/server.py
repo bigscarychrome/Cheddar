@@ -16,9 +16,9 @@ if ip == "":
 if port == "":
     port = random.randint(8000, 65535)
 rand = random.randint(1, 15)
-print(f"serving on {ip}:8081")
+print(f"serving on {ip}:{port}")
 print(f"Make sure to send ':stop' to exit, and not the x button to close.")
-print(f"As the server host pf {ip}:8081, your messages will appear as '[SERVER] Message'.")
+print(f"As the server host of {ip}:{port}, your messages will appear as '[SERVER] Message'.")
 print(f"The capacity for users is how many the server can handle!")
 print(f"Please wait while we start your server...")
 print(f"", end="\r")
@@ -42,8 +42,17 @@ print("Server started on {ip}:{port}")
 # app
 
 server.bind((ip, int(port)))
+server.listen(5)
+clients = []
+running = True
 
-kb = KeyBindings()
+# --- UI setup ---
+output_field = TextArea(
+    text=f"Server running at {ip}:{port}\nType ':stop' to exit.\n\n",
+    read_only=True,
+    scrollbar=True,
+    wrap_lines=True,
+)
 
 input_field = TextArea(
     height=1,
@@ -51,66 +60,82 @@ input_field = TextArea(
     multiline=False,
 )
 
-output_field = output_field = TextArea(
-    text=f"Server running at {ip}:{port}\nType ':stop' to exit.\n\n",
-    read_only=True,
-    scrollbar=True,
-    wrap_lines=True,
-)
-running = True
+root_container = HSplit([output_field, input_field])
+kb = KeyBindings()
 
-@kb.add("enter")
-def _(event):
-    text = input_field.text.strip()
-    if text:
-        if text == ":stop":
-            server.close()
-            event.app.exit()
-    server.sendall(f"[SERVER] {text}".encode())
-def recv_forever():
-    """Continuously accept clients and receive messages while the app runs."""
-    server.listen(5)
-    while running:
+# --- Networking functions ---
+
+def broadcast(message: str):
+    """Send message to all connected clients."""
+    for c in clients[:]:
         try:
-            conn, addr = server.accept()
-            output_field.buffer.insert_text(f"[+] Connection from {addr}\n")
-
-            # Each client gets its own thread for receiving data
-            threading.Thread(
-                target=client_recv_loop,
-                args=(conn, addr),
-                daemon=True
-            ).start()
+            c.sendall(message.encode("utf-8"))
         except OSError:
-            break
+            clients.remove(c)
 
-def client_recv_loop(conn, addr):
-    """Receive data from one client in a loop."""
+def handle_client(conn, addr):
+    """Handle messages from one client."""
+    output_field.buffer.insert_text(f"[+] Client connected: {addr}\n")
     while running:
         try:
             data = conn.recv(1024)
             if not data:
                 break
-            message = data.decode(errors="ignore").strip()
-            output_field.buffer.insert_text(f"{message}\n")
-            conn.sendall(message.encode())
-        except ConnectionResetError:
-            print("CONN RESET. PLEASE SEND :stop")
+            msg = data.decode("utf-8").strip()
+            app.invalidate()  # update UI
+            output_field.buffer.insert_text(f"[{addr[0]}] {msg}\n")
+            broadcast(f"[{addr[0]}] {msg}")
         except OSError:
-            print("OSERROR, PLEASE SEND :stop")
-    output_field.buffer.insert_text(f"[-] Disconnected: {addr}\n")
+            break
+    output_field.buffer.insert_text(f"[-] Client disconnected: {addr}\n")
+    try:
+        clients.remove(conn)
+    except ValueError:
+        pass
     conn.close()
+    app.invalidate()
 
+def accept_clients():
+    """Accept clients continuously in background."""
+    while running:
+        try:
+            conn, addr = server.accept()
+            clients.append(conn)
+            threading.Thread(target=handle_client, args=(conn, addr), daemon=True).start()
+        except OSError:
+            break
 
-root_container = HSplit([
-    output_field,
-    input_field,
-])
+# --- Key binding for Enter ---
+@kb.add("enter")
+def _(event):
+    global running
+    text = input_field.text.strip()
+    if not text:
+        return
 
+    if text.lower() == ":stop":
+        output_field.buffer.insert_text("\nServer shutting down...\n")
+        broadcast("[SERVER] Server is shutting down.\n")
+        running = False
+        server.close()
+        time.sleep(0.5)
+        event.app.exit()
+        return
+
+    message = f"[SERVER] {text}\n"
+    output_field.buffer.insert_text(message)
+    broadcast(message)
+    input_field.buffer.reset()
+    app.invalidate()
+
+# --- Build and run app ---
 app = Application(
     layout=Layout(root_container, focused_element=input_field),
     key_bindings=kb,
     full_screen=True,
 )
-threading.Thread(target=recv_forever, daemon=True).start()
+
+# Background thread for accepting clients
+threading.Thread(target=accept_clients, daemon=True).start()
+
 app.run()
