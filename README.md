@@ -10,4 +10,4 @@ Click on "Releases" and download any version. (Latest reccomended.) then downloa
 Click on code, then codespaces, then create a codespace, then in the terminal, run "python3 server.py", or "python3 peer.py"
 # IMPORTANT
 READ THE LICENSE.MD (Or if you are a kid, licensekids.md)
-**THIS IS A CHAT FOR MINORS.**
+**THIS IS A CHAT FOR 13+ DUE TO NO FILTERING.**
