@@ -3,18 +3,37 @@ import time
 import random
 from prompt_toolkit.widgets import TextArea
 from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.shortcuts import ProgressBar
+from prompt_toolkit.shortcuts import ProgressBar, input_dialog, yes_no_dialog
 from prompt_toolkit.layout import Layout, HSplit
 from prompt_toolkit import Application
 import threading
 
 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-ip = input("Select an IP (For all, use 0.0.0.0, or simply dont type anything then hit enter):")
-port = input("Select a port (Try a number that is 8000-65535, dont type anything for a random port):")
-if ip == "":
-    ip = "0.0.0.0"
-if port == "":
-    port = random.randint(8000, 65535)
+ip = input_dialog(
+    title="IP",
+    text="Input the IP address to use."
+).run()
+if not ip:
+    exit(0)
+port = input_dialog(
+    title="port",
+    text="Input the port to use."
+).run()
+if not port:
+    exit(0)
+passwd = yes_no_dialog(
+    title="Password",
+    text="Do you want to use a password?"
+).run()
+if passwd == True:
+    password = input_dialog(
+        title="Password",
+        text="Please type the password",
+        password=True
+    ).run()
+else:
+    pass
+print(str(password))
 rand = random.randint(1, 15)
 print(f"serving on {ip}:{port}")
 print(f"Make sure to send ':stop' to exit, and not the x button to close.")
@@ -120,45 +139,27 @@ def handle_client(conn, addr):
     """Handle messages from one client (runs in worker thread)."""
     msg_queue.put(f"[+] Client connected: {addr}\n")
 
-    # Store display names per IP
-    if not hasattr(handle_client, "names"):
-        handle_client.names = {}  # {ip: display_name}
-
-    while running:
+    # If password protection is enabled, ask for it
+    if passwd == True:
         try:
-            data = conn.recv(1024)
-            if not data:
-                break
-            msg = data.decode("utf-8", errors="ignore").strip()
+            conn.sendall(b"001307")  # Server requests password
+            recv_pass = conn.recv(1024).decode("utf-8", errors="ignore").strip()
+            if recv_pass != password:
+                conn.sendall(b"Incorrect password.\n")
+                conn.close()
+                msg_queue.put(f"[-] {addr} disconnected (wrong password)\n")
+                return
+            else:
+                conn.sendall(b"Password accepted.\n")
+                msg_queue.put(f"[SERVER] {addr} logged in successfully.\n")
+        except Exception as e:
+            msg_queue.put(f"[SERVER] Error during password check: {e}\n")
+            try:
+                conn.close()
+            except:
+                pass
+            return
 
-            # --- NEW FEATURE ---
-            # If message ends with "306", set this IP's display name
-            if msg.endswith("306"):
-                display_name = msg[:-3].strip()
-                if display_name:
-                    handle_client.names[addr[0]] = display_name
-                    msg_queue.put(f"[SERVER] {addr[0]} is now known as {display_name}\n")
-                    broadcast(f"[SERVER] {addr[0]} is now known as {display_name}\n")
-                continue
-            # -------------------
-
-            # Determine display name if exists
-            name = handle_client.names.get(addr[0], addr[0])
-            msg_queue.put(f"[{name}] {msg}\n")
-            broadcast(f"[{name}] {msg}\n")
-
-        except (OSError, ConnectionResetError):
-            break
-
-    msg_queue.put(f"[-] Client disconnected: {addr}\n")
-    try:
-        clients.remove(conn)
-    except ValueError:
-        pass
-    try:
-        conn.close()
-    except Exception:
-        pass
 
 def accept_clients():
     """Accept clients continuously in background (worker thread)."""
